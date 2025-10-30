@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional
 
@@ -38,6 +39,7 @@ class PromptOptimizer:
     def __init__(self, config: AppConfig) -> None:
         self.config = config
         self._backends: Dict[str, BackendCallable] = {}
+        self.warnings: list[str] = []
         self._auto_register_backends()
 
     def register_backend(self, name: str, backend: BackendCallable) -> None:
@@ -82,65 +84,75 @@ class PromptOptimizer:
 
     def _auto_register_backends(self) -> None:
         """根据现有依赖自动注册后端（如果可用）。"""
-        # Anthropic / Claude
-        if self.config.anthropic_key:
-            try:
-                import anthropic
+        self._register_claude_backend()
+        self._register_openai_backend()
 
-                client = anthropic.Anthropic(api_key=self.config.anthropic_key)
+    def _register_claude_backend(self) -> None:
+        if not self.config.anthropic_key:
+            return
+        try:
+            anthropic_module = importlib.import_module("anthropic")
+        except ImportError as exc:  # pragma: no cover - optional dependency
+            self.warnings.append(f"无法导入 anthropic：{exc}")
+            return
 
-                def _claude_backend(request: BackendRequest) -> str:
-                    message = client.messages.create(
-                        model=self.config.metadata.get(
-                            "claude_model", "claude-3-haiku-20240307"
+        client = anthropic_module.Anthropic(api_key=self.config.anthropic_key)
+
+        def _claude_backend(request: BackendRequest) -> str:
+            message = client.messages.create(
+                model=self.config.metadata.get("claude_model", "claude-3-haiku-20240307"),
+                max_tokens=256,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "请根据提供的提示词生成更具表现力的描述，用中文输出。"
+                            " 保留关键信息并加强风格描述。"
                         ),
-                        max_tokens=256,
-                        messages=[
-                            {
-                                "role": "system",
-                                "content": (
-                                    "请根据提供的提示词生成更具表现力的描述，用中文输出。"
-                                    " 保留关键信息并加强风格描述。"
-                                ),
-                            },
-                            {
-                                "role": "user",
-                                "content": (
-                                    f"基础提示：{request.original_prompt}\n"
-                                    f"风格提示：{request.positive_style}"
-                                ),
-                            },
-                        ],
-                    )
-                    return message.content[0].text if message.content else request.prompt_text
-
-                self.register_backend("claude", _claude_backend)
-            except Exception:
-                # 如果依赖不可用或初始化失败，则跳过自动注册
-                pass
-
-        # OpenAI / GPT
-        if self.config.openai_key:
-            try:
-                from openai import OpenAI
-
-                client = OpenAI(api_key=self.config.openai_key)
-
-                def _gpt_backend(request: BackendRequest) -> str:
-                    completion = client.responses.create(
-                        model=self.config.metadata.get("openai_model", "gpt-4o-mini"),
-                        input=(
-                            "请改写以下提示词，使其更加细腻且具备艺术表达力，"
-                            "并保持中文输出。\n"
+                    },
+                    {
+                        "role": "user",
+                        "content": (
                             f"基础提示：{request.original_prompt}\n"
                             f"风格提示：{request.positive_style}"
                         ),
-                        max_output_tokens=256,
-                    )
-                    return (
-                        completion.output_text if hasattr(completion, "output_text") else request.prompt_text
-                    )
+                    },
+                ],
+            )
+            return message.content[0].text if message.content else request.prompt_text
 
-                self.register_backend("gpt", _gpt_backend)
-            except Exception:
-                pass
+        self.register_backend("claude", _claude_backend)
+
+    def _register_openai_backend(self) -> None:
+        if not self.config.openai_key:
+            return
+        try:
+            openai_module = importlib.import_module("openai")
+        except ImportError as exc:
+            self.warnings.append(f"无法导入 openai：{exc}")
+            return
+
+        client = openai_module.OpenAI(api_key=self.config.openai_key)
+
+        def _gpt_backend(request: BackendRequest) -> str:
+            completion = client.responses.create(
+                model=self.config.metadata.get("openai_model", "gpt-4o-mini"),
+                input=(
+                    "请扩展以下提示词，使其具有画面感、光影、构图与情绪细节，并保持中文输出，"
+                    "可以拆分为多句或多段描述。\n"
+                    f"基础提示：{request.original_prompt}\n"
+                    f"风格提示：{request.positive_style}"
+                ),
+                max_output_tokens=512,
+            )
+            if hasattr(completion, "output_text"):
+                return completion.output_text or request.prompt_text
+
+            # 兼容旧版 SDK，尝试从返回结构中提取文本
+            if getattr(completion, "choices", None):
+                text = completion.choices[0].message.get("content")  # type: ignore[index]
+                if isinstance(text, str) and text.strip():
+                    return text
+            return request.prompt_text
+
+        self.register_backend("gpt", _gpt_backend)
