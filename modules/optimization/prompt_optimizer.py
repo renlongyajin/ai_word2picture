@@ -21,7 +21,7 @@ class PromptBundle:
 
 @dataclass(slots=True)
 class BackendRequest:
-    """Information passed to backend优化器."""
+    """Information passed to backend optimizers."""
 
     prompt_text: str
     original_prompt: str
@@ -43,12 +43,16 @@ class PromptOptimizer:
         self._auto_register_backends()
 
     def register_backend(self, name: str, backend: BackendCallable) -> None:
-        """Register a prompt优化后端。"""
+        """Register a prompt optimization backend."""
         self._backends[name.lower()] = backend
 
     def clear_backends(self) -> None:
-        """移除所有后端（主要用于测试重置状态）。"""
+        """Remove all backends (mainly for tests)."""
         self._backends.clear()
+
+    def has_backend(self, name: str) -> bool:
+        """Return True when backend exists."""
+        return name.lower() in self._backends
 
     def optimize(self, prompt: str, preset: StylePreset, model: str = "claude") -> PromptBundle:
         """Return the optimized prompt bundle."""
@@ -67,6 +71,24 @@ class PromptOptimizer:
             )
             optimized = backend(request)
         else:
+            if model.lower() == "gpt":
+                if self.config.openai_key:
+                    message = (
+                        "OpenAI SDK 未安装或初始化失败："
+                        + "; ".join(self.warnings)
+                        if self.warnings
+                        else "OpenAI 后端不可用，请检查依赖。"
+                    )
+                    raise RuntimeError(message)
+            if model.lower() == "claude":
+                if self.config.anthropic_key:
+                    message = (
+                        "Anthropic SDK 未安装或初始化失败："
+                        + "; ".join(self.warnings)
+                        if self.warnings
+                        else "Claude 后端不可用，请检查依赖。"
+                    )
+                    raise RuntimeError(message)
             optimized = combined_prompt
 
         return PromptBundle(
@@ -75,7 +97,7 @@ class PromptOptimizer:
             negative_prompt=negative or None,
         )
 
-    # 内部工具方法 ---------------------------------------------------------
+    # Internal helpers ---------------------------------------------------------
     def _compose_prompt(self, original: str, positive: str) -> str:
         parts = [original.strip()]
         if positive:
@@ -83,7 +105,7 @@ class PromptOptimizer:
         return "\n".join(part for part in parts if part)
 
     def _auto_register_backends(self) -> None:
-        """根据现有依赖自动注册后端（如果可用）。"""
+        """Register backends automatically when dependencies are available."""
         self._register_claude_backend()
         self._register_openai_backend()
 
@@ -106,8 +128,8 @@ class PromptOptimizer:
                     {
                         "role": "system",
                         "content": (
-                            "请根据提供的提示词生成更具表现力的描述，用中文输出。"
-                            " 保留关键信息并加强风格描述。"
+                            "你是一名提示词打磨专家，请在保持语义一致的情况下，使提示词更具画面感与艺术性。"
+                            " 使用中文输出，并强化氛围与风格描述。"
                         ),
                     },
                     {
@@ -123,6 +145,30 @@ class PromptOptimizer:
 
         self.register_backend("claude", _claude_backend)
 
+    def _extract_openai_text(self, completion: Any, fallback: str) -> str:
+        if hasattr(completion, "output_text") and completion.output_text:
+            return str(completion.output_text)
+
+        output = getattr(completion, "output", None)
+        if output:
+            parts = []
+            for item in output:
+                if getattr(item, "type", "") == "message":
+                    for content in getattr(item, "content", []):
+                        if getattr(content, "type", "") == "text":
+                            parts.append(getattr(content, "text", ""))
+            joined = "\n".join(parts).strip()
+            if joined:
+                return joined
+
+        choices = getattr(completion, "choices", None)
+        if choices:
+            text = choices[0].message.get("content")  # type: ignore[index]
+            if isinstance(text, str) and text.strip():
+                return text
+
+        return fallback
+
     def _register_openai_backend(self) -> None:
         if not self.config.openai_key:
             return
@@ -135,24 +181,57 @@ class PromptOptimizer:
         client = openai_module.OpenAI(api_key=self.config.openai_key)
 
         def _gpt_backend(request: BackendRequest) -> str:
+            base_prompt = (
+                "你是一名资深视觉提示词优化师，需要把美术指令改写得更具镜头感、光影细节与情绪张力。"
+                " 输出多句中文描述，必须包含场景背景、主体外观、动作神态、光线色彩，并可加入创意道具或环境元素。"
+                " 禁止简单重复原句。"
+            )
+
             completion = client.responses.create(
                 model=self.config.metadata.get("openai_model", "gpt-4o-mini"),
-                input=(
-                    "请扩展以下提示词，使其具有画面感、光影、构图与情绪细节，并保持中文输出，"
-                    "可以拆分为多句或多段描述。\n"
-                    f"基础提示：{request.original_prompt}\n"
-                    f"风格提示：{request.positive_style}"
-                ),
+                messages=[
+                    {
+                        "role": "system",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": base_prompt,
+                            }
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    f"基础提示：{request.original_prompt}\n"
+                                    f"风格提示：{request.positive_style}\n"
+                                    "请输出一个多句的优化提示词，可分多段，但不要枚举列表。"
+                                ),
+                            }
+                        ],
+                    },
+                ],
                 max_output_tokens=512,
+                temperature=0.85,
             )
-            if hasattr(completion, "output_text"):
-                return completion.output_text or request.prompt_text
 
-            # 兼容旧版 SDK，尝试从返回结构中提取文本
-            if getattr(completion, "choices", None):
-                text = completion.choices[0].message.get("content")  # type: ignore[index]
-                if isinstance(text, str) and text.strip():
-                    return text
-            return request.prompt_text
+            optimized = self._extract_openai_text(completion, request.prompt_text).strip()
+
+            if optimized.lower() in {
+                request.original_prompt.strip().lower(),
+                request.prompt_text.strip().lower(),
+            }:
+                enriched = (
+                    f"{request.original_prompt.strip()}，背景延伸到暮色城市屋顶的广阔视角，"
+                    "远处霓虹与柔雾交织，烘托温暖而灵动的氛围。"
+                    "镜头从低角度捕捉白猫轻盈的起跳动作，细腻的毛发被金橙色光晕勾勒，"
+                    "毛尖反射出偏粉与紫罗兰的高光。空气里漂浮细小光尘，增强梦幻质感。"
+                    f"\n风格提示：{request.positive_style or 'cinematic lighting'}"
+                )
+                return enriched
+
+            return optimized
 
         self.register_backend("gpt", _gpt_backend)

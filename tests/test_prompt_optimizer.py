@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import types
 
 import pytest
@@ -48,7 +49,6 @@ def test_optimize_fallback_without_backend():
 def test_openai_backend_registered(monkeypatch):
     """Ensure GPT backend registers and transforms prompt when OpenAI SDK 可用。"""
 
-    # 构造假的 openai 模块
     class DummyCompletion:
         def __init__(self, text: str) -> None:
             self.output_text = text
@@ -91,3 +91,28 @@ def test_openai_backend_registered(monkeypatch):
 
     assert "优化后的提示" in bundle.optimized
     assert optimizer.warnings == []
+
+
+@pytest.mark.integration
+def test_openai_backend_real_call():
+    """实际调用 OpenAI 接口验证提示词被优化。"""
+
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        pytest.skip("未检测到 OPENAI_API_KEY，跳过真实 OpenAI 调用测试。")
+
+    config = AppConfig()
+    config.openai_key = api_key
+    config.metadata = {"openai_model": "gpt-4o-mini"}
+
+    optimizer = PromptOptimizer(config)
+    assert optimizer.has_backend("gpt"), f"OpenAI 后端未注册：{optimizer.warnings}"
+
+    preset = StylePreset(name="studio", positive="cinematic lighting, depth of field")
+
+    original_prompt = "一只可爱的白猫，动画风格，可以参考《罗小黑战记》里面的罗小黑"
+    bundle = optimizer.optimize(original_prompt, preset, model="gpt")
+    optimized = bundle.optimized.strip()
+    print("优化后提示词：", optimized)
+    assert optimized, "优化结果不应为空"
+    assert optimized != original_prompt, "优化后的提示词应该与原始提示词有所不同"
