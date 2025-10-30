@@ -63,42 +63,55 @@ def build_callbacks(
         return "\n".join(filter(None, parts))
 
     def _combine_negative(
-        preset: StylePreset, user_negative: str, bundle_negative: Optional[str]
+        preset: StylePreset, user_negative: str, optimized_negative: Optional[str]
     ) -> Optional[str]:
         segments = [
-            (bundle_negative or "").strip(),
+            (optimized_negative or "").strip(),
             (preset.negative or "").strip(),
             (user_negative or "").strip(),
         ]
         merged = "\n".join(segment for segment in segments if segment)
         return merged or None
 
+    def on_optimize_prompt(
+        prompt: str,
+        style_name: str,
+        model_name: str,
+    ) -> tuple[str, str, str]:
+        style = _resolve_style(style_name or config.default_prompt_style)
+
+        if optimizer is None:
+            return prompt, "", "未配置提示词优化服务，已返回原始提示。"
+
+        try:
+            bundle = optimizer.optimize(prompt, style, model=model_name or "claude")
+        except Exception as exc:  # noqa: BLE001
+            return prompt, "", f"提示词优化失败：{exc}"
+
+        optimized_prompt = bundle.optimized or prompt
+        optimized_negative = bundle.negative_prompt or ""
+        return optimized_prompt, optimized_negative, "提示词优化成功，可在生成前继续编辑。"
+
     def on_generate_text(
         prompt: str,
+        optimized_prompt: str,
         negative_prompt: str,
+        optimized_negative: str,
         guidance_scale: float,
         steps: int,
         seed: Optional[int],
         height: int,
         width: int,
         style_name: str,
-        use_optimizer: bool,
         model_name: str,
     ) -> tuple[Optional[Any], str]:
         service = _ensure_text_service()
         style = _resolve_style(style_name or config.default_prompt_style)
 
-        bundle_negative: Optional[str] = None
-        if use_optimizer and optimizer is not None:
-            bundle = optimizer.optimize(prompt, style, model=model_name or "claude")
-            prompt_for_model = bundle.optimized
-            bundle_negative = bundle.negative_prompt
-        else:
-            prompt_for_model = _compose_prompt(prompt, style)
-
+        prompt_for_model = optimized_prompt.strip() or _compose_prompt(prompt, style)
         request = PromptRequest(
             prompt=prompt_for_model,
-            negative_prompt=_combine_negative(style, negative_prompt, bundle_negative),
+            negative_prompt=_combine_negative(style, negative_prompt, optimized_negative or None),
             guidance_scale=float(guidance_scale),
             steps=int(steps),
             seed=_normalize_seed(seed),
@@ -107,7 +120,7 @@ def build_callbacks(
         )
         try:
             result: ImageResult = service.generate(request)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             return None, f"生成失败：{exc}"
 
         info = "生成成功"
@@ -126,13 +139,14 @@ def build_callbacks(
     def on_generate_image(
         init_image: Any,
         prompt: str,
+        optimized_prompt: str,
         negative_prompt: str,
+        optimized_negative: str,
         strength: float,
         guidance_scale: float,
         steps: int,
         seed: Optional[int],
         style_name: str,
-        use_optimizer: bool,
         model_name: str,
         control_type_name: str,
         control_image: Any,
@@ -145,19 +159,13 @@ def build_callbacks(
         service = _ensure_image_service()
         style = _resolve_style(style_name or config.default_prompt_style)
 
-        bundle_negative: Optional[str] = None
-        if use_optimizer and optimizer is not None:
-            bundle = optimizer.optimize(prompt, style, model=model_name or "claude")
-            prompt_for_model = bundle.optimized
-            bundle_negative = bundle.negative_prompt
-        else:
-            prompt_for_model = _compose_prompt(prompt, style)
-
+        prompt_for_model = optimized_prompt.strip() or _compose_prompt(prompt, style)
         control_type = _parse_control_type(control_type_name)
+
         request = ImageToImageRequest(
             prompt=prompt_for_model,
             init_image=init_image,
-            negative_prompt=_combine_negative(style, negative_prompt, bundle_negative),
+            negative_prompt=_combine_negative(style, negative_prompt, optimized_negative or None),
             strength=float(strength),
             guidance_scale=float(guidance_scale),
             steps=int(steps),
@@ -169,7 +177,7 @@ def build_callbacks(
         )
         try:
             result: ImageToImageResult = service.generate(request)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             return None, f"生成失败：{exc}"
 
         info = "生成成功"
@@ -178,6 +186,7 @@ def build_callbacks(
         return result.image, info
 
     return {
+        "on_optimize_prompt": on_optimize_prompt,
         "on_generate_text": on_generate_text,
         "on_generate_image": on_generate_image,
     }

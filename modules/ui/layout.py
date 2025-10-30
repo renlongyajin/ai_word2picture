@@ -1,4 +1,4 @@
-"""Gradio layout composition."""
+"""Gradio layout composition with prompt optimization preview."""
 
 from __future__ import annotations
 
@@ -64,7 +64,10 @@ def build_app(config: AppConfig) -> Any:
     with gr.Blocks(title="AI Creative Image Assistant") as demo:
         gr.Markdown("## AI 创意图像助手")
 
+        # 文生图
         with gr.Tab("文生图"):
+            optimized_negative_state = gr.State("")
+
             with gr.Row():
                 with gr.Column():
                     prompt = gr.Textbox(
@@ -72,21 +75,28 @@ def build_app(config: AppConfig) -> Any:
                         lines=4,
                         placeholder="描述你想要生成的图像…",
                     )
+                    optimized_prompt = gr.Textbox(
+                        label="优化后提示词（可编辑）",
+                        lines=4,
+                        placeholder="点击提示词优化后将填充此处",
+                    )
+                    with gr.Row():
+                        style_select = gr.Dropdown(
+                            label="风格模板",
+                            choices=style_choices,
+                            value=style_choices[0] if style_choices else "default",
+                        )
+                        backend_select = gr.Dropdown(
+                            label="优化模型",
+                            choices=backend_choices,
+                            value=backend_choices[0],
+                        )
+                        optimize_btn = gr.Button("提示词优化")
+
                     negative = gr.Textbox(
                         label="反向提示词",
                         lines=2,
                         placeholder="不希望出现的元素…",
-                    )
-                    style_select = gr.Dropdown(
-                        label="风格模板",
-                        choices=style_choices,
-                        value=style_choices[0] if style_choices else "default",
-                    )
-                    use_optimizer = gr.Checkbox(label="启用 Prompt 优化", value=False)
-                    backend_select = gr.Dropdown(
-                        label="优化模型",
-                        choices=backend_choices,
-                        value=backend_choices[0],
                     )
                     guidance = gr.Slider(
                         label="引导系数",
@@ -123,41 +133,58 @@ def build_app(config: AppConfig) -> Any:
                     output_image = gr.Image(label="生成结果", type="pil")
                     status = gr.Markdown("准备就绪。")
 
+            optimize_btn.click(
+                fn=callbacks_map["on_optimize_prompt"],
+                inputs=[prompt, style_select, backend_select],
+                outputs=[optimized_prompt, optimized_negative_state, status],
+            )
+
             generate_btn.click(
                 fn=callbacks_map["on_generate_text"],
                 inputs=[
                     prompt,
+                    optimized_prompt,
                     negative,
+                    optimized_negative_state,
                     guidance,
                     steps,
                     seed,
                     height,
                     width,
                     style_select,
-                    use_optimizer,
                     backend_select,
                 ],
                 outputs=[output_image, status],
             )
 
+        # 图生图
         with gr.Tab("图生图"):
+            optimized_negative_state_img = gr.State("")
+
             with gr.Row():
                 with gr.Column():
                     init_image = gr.Image(label="初始图像", type="pil")
                     control_image = gr.Image(label="ControlNet 参考图像（可选）", type="pil")
-                    prompt_img = gr.Textbox(label="提示词", lines=4, placeholder="描述目标风格…")
+                    prompt_img = gr.Textbox(label="提示词", lines=4, placeholder="描述目标效果…")
+                    optimized_prompt_img = gr.Textbox(
+                        label="优化后提示词（可编辑）",
+                        lines=4,
+                        placeholder="点击提示词优化后将填充此处",
+                    )
+                    with gr.Row():
+                        style_select_img = gr.Dropdown(
+                            label="风格模板",
+                            choices=style_choices,
+                            value=style_choices[0] if style_choices else "default",
+                        )
+                        backend_select_img = gr.Dropdown(
+                            label="优化模型",
+                            choices=backend_choices,
+                            value=backend_choices[0],
+                        )
+                        optimize_btn_img = gr.Button("提示词优化（图生图）")
+
                     negative_img = gr.Textbox(label="反向提示词", lines=2)
-                    style_select_img = gr.Dropdown(
-                        label="风格模板",
-                        choices=style_choices,
-                        value=style_choices[0] if style_choices else "default",
-                    )
-                    use_optimizer_img = gr.Checkbox(label="启用 Prompt 优化", value=False)
-                    backend_select_img = gr.Dropdown(
-                        label="优化模型",
-                        choices=backend_choices,
-                        value=backend_choices[0],
-                    )
                     strength = gr.Slider(
                         label="重绘强度",
                         minimum=0.0,
@@ -199,18 +226,25 @@ def build_app(config: AppConfig) -> Any:
                     output_image_img = gr.Image(label="生成结果", type="pil")
                     status_img = gr.Markdown("准备就绪。")
 
+            optimize_btn_img.click(
+                fn=callbacks_map["on_optimize_prompt"],
+                inputs=[prompt_img, style_select_img, backend_select_img],
+                outputs=[optimized_prompt_img, optimized_negative_state_img, status_img],
+            )
+
             generate_img_btn.click(
                 fn=callbacks_map["on_generate_image"],
                 inputs=[
                     init_image,
                     prompt_img,
+                    optimized_prompt_img,
                     negative_img,
+                    optimized_negative_state_img,
                     strength,
                     guidance_img,
                     steps_img,
                     seed_img,
                     style_select_img,
-                    use_optimizer_img,
                     backend_select_img,
                     control_select,
                     control_image,

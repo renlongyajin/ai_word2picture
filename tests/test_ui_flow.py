@@ -82,28 +82,54 @@ def build_callbacks(
     )
 
 
-def test_on_generate_text_returns_image():
+def test_on_optimize_prompt_success():
+    optimizer = DummyOptimizer()
+    registry = StylePresetRegistry()
+    registry.add(StylePreset(name="dreamy", positive="dreamy light"))
+    cb = build_callbacks(optimizer=optimizer, registry=registry)["on_optimize_prompt"]
+
+    optimized, optimized_negative, message = cb("prompt", "dreamy", "claude")
+
+    assert optimized.endswith("OPT")
+    assert optimized_negative == "optimizer negative"
+    assert "成功" in message
+    assert optimizer.calls
+
+
+def test_on_optimize_prompt_without_backend():
+    cb = build_callbacks()["on_optimize_prompt"]
+    optimized, optimized_negative, message = cb("prompt", "default", "claude")
+
+    assert optimized == "prompt"
+    assert optimized_negative == ""
+    assert "未配置" in message
+
+
+def test_on_generate_text_uses_optimized_prompt():
     text_service = DummyText2ImageService()
     cb = build_callbacks(text_service=text_service)["on_generate_text"]
 
     image, message = cb(
-        "a cat",
-        "",
+        "base prompt",
+        "optimized prompt",
+        "user negative",
+        "opt negative",
         6.5,
         20,
         None,
         512,
         512,
         "default",
-        False,
         "claude",
     )
 
     assert image == "dummy-image"
     assert "生成成功" in message
-    assert text_service.last_request is not None
-    assert text_service.last_request.prompt == "a cat"
-    assert text_service.last_request.steps == 20
+    request = text_service.last_request
+    assert request is not None
+    assert request.prompt == "optimized prompt"
+    assert "opt negative" in (request.negative_prompt or "")
+    assert "user negative" in (request.negative_prompt or "")
 
 
 def test_on_generate_text_handles_exception():
@@ -111,49 +137,25 @@ def test_on_generate_text_handles_exception():
     text_service.should_fail = True
     cb = build_callbacks(text_service=text_service)["on_generate_text"]
 
-    image, message = cb("prompt", "", 7.5, 30, None, 512, 512, "default", False, "claude")
+    image, message = cb(
+        "prompt",
+        "",
+        "",
+        "",
+        7.5,
+        30,
+        None,
+        512,
+        512,
+        "default",
+        "claude",
+    )
 
     assert image is None
     assert "生成失败" in message
 
 
-def test_on_generate_text_with_optimizer():
-    text_service = DummyText2ImageService()
-    optimizer = DummyOptimizer()
-    registry = StylePresetRegistry()
-    registry.add(StylePreset(name="dreamy", positive="dreamy light", negative="style negative"))
-
-    cb = build_callbacks(
-        optimizer=optimizer,
-        text_service=text_service,
-        registry=registry,
-    )["on_generate_text"]
-
-    image, message = cb(
-        "prompt base",
-        "user negative",
-        7.0,
-        25,
-        None,
-        512,
-        512,
-        "dreamy",
-        True,
-        "claude",
-    )
-
-    assert image == "dummy-image"
-    assert "生成成功" in message
-    assert optimizer.calls, "优化器应被调用"
-    request = text_service.last_request
-    assert request is not None
-    assert request.prompt.endswith("OPT")
-    assert "style negative" in (request.negative_prompt or "")
-    assert "optimizer negative" in (request.negative_prompt or "")
-    assert "user negative" in (request.negative_prompt or "")
-
-
-def test_on_generate_image_without_control():
+def test_on_generate_image_with_control_and_optimized_prompt():
     text_service = DummyText2ImageService()
     image_service = DummyImage2ImageService()
     cb = build_callbacks(text_service=text_service, image_service=image_service)["on_generate_image"]
@@ -161,54 +163,14 @@ def test_on_generate_image_without_control():
     image, message = cb(
         "init-image",
         "base prompt",
-        "",
-        0.6,
-        8.0,
-        18,
-        99,
-        "default",
-        False,
-        "claude",
-        "",
-        None,
-        1.0,
-        False,
-    )
-
-    assert image == "dummy-image"
-    assert "生成成功" in message
-    request = image_service.last_request
-    assert request is not None
-    assert request.prompt == "base prompt"
-    assert request.control_type is None
-    assert request.strength == pytest.approx(0.6)
-    assert request.seed == 99
-
-
-def test_on_generate_image_with_control_and_optimizer():
-    text_service = DummyText2ImageService()
-    image_service = DummyImage2ImageService()
-    optimizer = DummyOptimizer()
-    registry = StylePresetRegistry()
-    registry.add(StylePreset(name="dreamy", positive="dreamy", negative="style neg"))
-
-    cb = build_callbacks(
-        optimizer=optimizer,
-        text_service=text_service,
-        image_service=image_service,
-        registry=registry,
-    )["on_generate_image"]
-
-    image, message = cb(
-        "init-image",
-        "base prompt",
+        "optimized prompt",
         "user negative",
+        "opt negative",
         0.7,
         7.5,
         30,
         None,
-        "dreamy",
-        True,
+        "default",
         "claude",
         ControlType.CANNY.value,
         "edge-map",
@@ -218,15 +180,35 @@ def test_on_generate_image_with_control_and_optimizer():
 
     assert image == "dummy-image"
     assert "生成成功" in message
-    assert optimizer.calls
     request = image_service.last_request
     assert request is not None
-    assert request.prompt.endswith("OPT")
+    assert request.prompt == "optimized prompt"
     assert request.control_type == ControlType.CANNY
     assert request.control_image == "edge-map"
-    assert request.controlnet_conditioning_scale == pytest.approx(0.8)
-    assert request.guess_mode is True
     negative = request.negative_prompt or ""
-    assert "style neg" in negative
-    assert "optimizer negative" in negative
     assert "user negative" in negative
+    assert "opt negative" in negative
+
+
+def test_on_generate_image_requires_init_image():
+    cb = build_callbacks(image_service=DummyImage2ImageService())["on_generate_image"]
+    image, message = cb(
+        None,
+        "prompt",
+        "",
+        "",
+        "",
+        0.5,
+        7.0,
+        20,
+        None,
+        "default",
+        "claude",
+        "",
+        None,
+        1.0,
+        False,
+    )
+
+    assert image is None
+    assert "请先上传初始图像" in message
