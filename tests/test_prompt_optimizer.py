@@ -7,7 +7,7 @@ import types
 
 import pytest
 
-from config.settings import AppConfig
+from config.settings import AppConfig, load_config
 from modules.optimization.prompt_optimizer import PromptOptimizer
 from modules.optimization.style_presets import StylePreset
 
@@ -97,13 +97,14 @@ def test_openai_backend_registered(monkeypatch):
 def test_openai_backend_real_call():
     """实际调用 OpenAI 接口验证提示词被优化。"""
 
-    api_key = os.getenv("OPENAI_API_KEY")
+    config_env = load_config()
+    api_key = config_env.openai_key or os.getenv("OPENAI_API_KEY")
     if not api_key:
         pytest.skip("未检测到 OPENAI_API_KEY，跳过真实 OpenAI 调用测试。")
 
     config = AppConfig()
     config.openai_key = api_key
-    config.metadata = {"openai_model": "gpt-4o-mini"}
+    config.metadata = dict(config_env.metadata)
 
     optimizer = PromptOptimizer(config)
     assert optimizer.has_backend("gpt"), f"OpenAI 后端未注册：{optimizer.warnings}"

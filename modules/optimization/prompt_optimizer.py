@@ -178,7 +178,11 @@ class PromptOptimizer:
             self.warnings.append(f"无法导入 openai：{exc}")
             return
 
-        client = openai_module.OpenAI(api_key=self.config.openai_key)
+        base_url = self.config.metadata.get("openai_base_url")
+        client_kwargs = {"api_key": self.config.openai_key}
+        if base_url:
+            client_kwargs["base_url"] = base_url
+        client = openai_module.OpenAI(**client_kwargs)
 
         def _gpt_backend(request: BackendRequest) -> str:
             base_prompt = (
@@ -187,37 +191,55 @@ class PromptOptimizer:
                 " 禁止简单重复原句。"
             )
 
-            completion = client.responses.create(
-                model=self.config.metadata.get("openai_model", "gpt-4o-mini"),
-                messages=[
-                    {
-                        "role": "system",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": base_prompt,
-                            }
-                        ],
-                    },
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    f"基础提示：{request.original_prompt}\n"
-                                    f"风格提示：{request.positive_style}\n"
-                                    "请输出一个多句的优化提示词，可分多段，但不要枚举列表。"
-                                ),
-                            }
-                        ],
-                    },
-                ],
-                max_output_tokens=512,
-                temperature=0.85,
-            )
+            model_name = self.config.metadata.get("openai_model", "gpt-4o-mini")
 
-            optimized = self._extract_openai_text(completion, request.prompt_text).strip()
+            if base_url:
+                completion = client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": base_prompt},
+                        {
+                            "role": "user",
+                            "content": (
+                                f"基础提示：{request.original_prompt}\n"
+                                f"风格提示：{request.positive_style}\n"
+                                "请输出一个多句的优化提示词，可分多段，但不要枚举列表。"
+                            ),
+                        },
+                    ],
+                    max_tokens=512,
+                    temperature=0.85,
+                )
+                if completion.choices:
+                    optimized = (completion.choices[0].message.content or "").strip()
+                else:
+                    optimized = ""
+            else:
+                completion = client.responses.create(
+                    model=model_name,
+                    input=[
+                        {
+                            "role": "system",
+                            "content": [{"type": "text", "text": base_prompt}],
+                        },
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": (
+                                        f"基础提示：{request.original_prompt}\n"
+                                        f"风格提示：{request.positive_style}\n"
+                                        "请输出一个多句的优化提示词，可分多段，但不要枚举列表。"
+                                    ),
+                                }
+                            ],
+                        },
+                    ],
+                    max_output_tokens=512,
+                    temperature=0.85,
+                )
+                optimized = self._extract_openai_text(completion, request.prompt_text).strip()
 
             if optimized.lower() in {
                 request.original_prompt.strip().lower(),
