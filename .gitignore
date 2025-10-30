@@ -1,0 +1,18 @@
+# Environment & secrets
+.env
+
+# Model weights
+models/
+!models/README.md
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Virtual environments
+.venv/
+venv/
+
+# IDE settings
+.idea/
+.vscode/

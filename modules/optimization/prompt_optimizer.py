@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from config.settings import AppConfig
 from modules.optimization.style_presets import StylePreset
@@ -26,7 +26,7 @@ class BackendRequest:
     original_prompt: str
     positive_style: str
     negative_style: str
-    metadata: Dict[str, str]
+    metadata: Dict[str, Any]
 
 
 BackendCallable = Callable[[BackendRequest], str]
