@@ -1,0 +1,9 @@
+[
+  {
+    "name": "default",
+    "positive": "high quality, detailed",
+    "negative": "low quality, blurry",
+    "guidance_scale": null,
+    "sampler": null
+  }
+]
