@@ -6,6 +6,7 @@ from typing import Any, Optional
 
 from config.settings import AppConfig
 from modules.optimization.prompt_optimizer import PromptOptimizer
+from modules.optimization.style_presets import StylePreset, StylePresetRegistry
 from modules.pipelines.text2img import ImageResult, PromptRequest, Text2ImageService
 
 
@@ -13,8 +14,13 @@ def build_callbacks(
     config: AppConfig,
     optimizer: Optional[PromptOptimizer] = None,
     text2img: Optional[Text2ImageService] = None,
+    style_registry: Optional[StylePresetRegistry] = None,
 ) -> dict[str, Any]:
     """Return a dictionary of Gradio callback functions."""
+
+    registry = style_registry or StylePresetRegistry()
+    if not registry.list_presets():
+        registry.add(StylePreset(name="default", positive="", negative=""))
 
     def _ensure_service() -> Text2ImageService:
         if text2img is None:
@@ -36,6 +42,29 @@ def build_callbacks(
         except (TypeError, ValueError):
             return default
 
+    def _resolve_style(name: str) -> StylePreset:
+        try:
+            return registry.get(name)
+        except KeyError:
+            return registry.get("default")
+
+    def _compose_prompt(base: str, preset: StylePreset) -> str:
+        parts = [base.strip()]
+        if preset.positive:
+            parts.append(f"风格提示：{preset.positive.strip()}")
+        return "\n".join(filter(None, parts))
+
+    def _combine_negative(
+        preset: StylePreset, user_negative: str, bundle_negative: Optional[str]
+    ) -> Optional[str]:
+        segments = [
+            (bundle_negative or "").strip(),
+            (preset.negative or "").strip(),
+            (user_negative or "").strip(),
+        ]
+        merged = "\n".join(segment for segment in segments if segment)
+        return merged or None
+
     def on_generate_text(
         prompt: str,
         negative_prompt: str,
@@ -44,11 +73,24 @@ def build_callbacks(
         seed: Optional[int],
         height: int,
         width: int,
+        style_name: str,
+        use_optimizer: bool,
+        model_name: str,
     ) -> tuple[Optional[Any], str]:
         service = _ensure_service()
+        style = _resolve_style(style_name or "default")
+
+        prompt_for_model = _compose_prompt(prompt, style)
+        bundle_negative: Optional[str] = None
+
+        if use_optimizer and optimizer is not None:
+            bundle = optimizer.optimize(prompt, style, model=model_name or "claude")
+            prompt_for_model = bundle.optimized
+            bundle_negative = bundle.negative_prompt
+
         request = PromptRequest(
-            prompt=prompt,
-            negative_prompt=negative_prompt or None,
+            prompt=prompt_for_model,
+            negative_prompt=_combine_negative(style, negative_prompt, bundle_negative),
             guidance_scale=float(guidance_scale),
             steps=int(steps),
             seed=_normalize_seed(seed),

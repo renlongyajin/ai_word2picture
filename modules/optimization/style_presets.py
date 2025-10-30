@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -26,8 +27,19 @@ class StylePresetRegistry:
 
     def load_from_file(self, path: Path) -> None:
         """Load presets from a JSON file."""
-        _ = path
-        # Actual file loading will be implemented when assets are finalized.
+        if not path.exists():
+            return
+        with path.open("r", encoding="utf-8") as fp:
+            data = json.load(fp)
+        for entry in data:
+            preset = StylePreset(
+                name=entry["name"],
+                positive=entry.get("positive", ""),
+                negative=entry.get("negative", ""),
+                guidance_scale=entry.get("guidance_scale"),
+                sampler=entry.get("sampler"),
+            )
+            self.add(preset)
 
     def add(self, preset: StylePreset) -> None:
         """Register a new style preset."""
