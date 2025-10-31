@@ -116,7 +116,7 @@ def test_openai_backend_real_call():
     preset = StylePreset(name="studio", positive="cinematic lighting, depth of field")
 
     original_prompt = (
-        "A cute white cat in an anime style, inspired by Luo Xiaohei from The Legend of Hei"
+        "一只可爱风格的白色小猫，参考《罗小黑战记》中的罗小黑的猫咪形态。"
     )
     try:
         bundle = optimizer.optimize(original_prompt, preset, model="gpt")
