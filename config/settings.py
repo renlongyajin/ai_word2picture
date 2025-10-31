@@ -54,17 +54,18 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
         },
     }
 
-    openai_base_url = os.getenv("OPENAI_BASE_URL")
+    openai_key = os.getenv("OPENAI_API_KEY") or os.getenv("SILICONFLOW_API_KEY")
+    openai_base_url = os.getenv("OPENAI_BASE_URL") or os.getenv("SILICONFLOW_BASE_URL")
+    openai_model = os.getenv("OPENAI_MODEL") or os.getenv("SILICONFLOW_MODEL")
+
     if openai_base_url:
         metadata["openai_base_url"] = openai_base_url
-    openai_model = os.getenv("OPENAI_MODEL")
     if openai_model:
         metadata["openai_model"] = openai_model
-
     return AppConfig(
         text2img_model_id=metadata["text2img_model_id"],
         img2img_model_id=metadata["img2img_model_id"],
         anthropic_key=os.getenv("ANTHROPIC_API_KEY"),
-        openai_key=os.getenv("OPENAI_API_KEY"),
+        openai_key=openai_key,
         metadata=metadata,
     )

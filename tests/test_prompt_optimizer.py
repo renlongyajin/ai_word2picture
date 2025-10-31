@@ -1,4 +1,4 @@
-"""PromptOptimizer 单元测试。"""
+﻿"""PromptOptimizer unit tests."""
 
 from __future__ import annotations
 
@@ -25,29 +25,29 @@ def test_optimize_with_registered_backend():
 
     def fake_backend(request):
         assert "dreamy lighting" in request.prompt_text
-        return "LLM 优化后的提示"
+        return "LLM optimized prompt"
 
     optimizer.register_backend("claude", fake_backend)
-    bundle = optimizer.optimize("夕阳下的城市", preset, model="claude")
+    bundle = optimizer.optimize("A sunset city skyline", preset, model="claude")
 
-    assert bundle.optimized == "LLM 优化后的提示"
+    assert bundle.optimized == "LLM optimized prompt"
     assert bundle.negative_prompt == "low quality"
-    assert bundle.original == "夕阳下的城市"
+    assert bundle.original == "A sunset city skyline"
 
 
 def test_optimize_fallback_without_backend():
     optimizer = build_optimizer()
     preset = StylePreset(name="watercolor", positive="watercolor style", negative="harsh shadows")
 
-    bundle = optimizer.optimize("一只猫", preset, model="claude")
+    bundle = optimizer.optimize("A playful cat", preset, model="claude")
 
-    assert "一只猫" in bundle.optimized
+    assert "A playful cat" in bundle.optimized
     assert "watercolor style" in bundle.optimized
     assert bundle.negative_prompt == "harsh shadows"
 
 
 def test_openai_backend_registered(monkeypatch):
-    """Ensure GPT backend registers and transforms prompt when OpenAI SDK 可用。"""
+    """Ensure GPT backend registers and transforms prompt when OpenAI SDK is available."""
 
     class DummyCompletion:
         def __init__(self, text: str) -> None:
@@ -59,7 +59,7 @@ def test_openai_backend_registered(monkeypatch):
 
         def create(self, **kwargs):
             self.calls.append(kwargs)
-            return DummyCompletion("优化后的提示：猫咪在暮色街头跳跃，光影柔和。")
+            return DummyCompletion("Optimized prompt: cat in neon-lit alley")
 
     class DummyOpenAI:
         def __init__(self, api_key: str) -> None:
@@ -84,23 +84,27 @@ def test_openai_backend_registered(monkeypatch):
 
     optimizer = PromptOptimizer(config)
     bundle = optimizer.optimize(
-        prompt="一只可爱的白猫在屋顶晒太阳",
+        prompt="A white cat stretches on a warm rooftop",
         preset=StylePreset(name="default", positive="soft lighting"),
         model="gpt",
     )
 
-    assert "优化后的提示" in bundle.optimized
+    assert "Optimized prompt" in bundle.optimized
     assert optimizer.warnings == []
 
 
 @pytest.mark.integration
 def test_openai_backend_real_call():
-    """实际调用 OpenAI 接口验证提示词被优化。"""
+    """Invoke the real OpenAI-compatible backend to ensure prompts are enhanced."""
 
     config_env = load_config()
-    api_key = config_env.openai_key or os.getenv("OPENAI_API_KEY")
+    api_key = (
+        config_env.openai_key
+        or os.getenv("OPENAI_API_KEY")
+        or os.getenv("SILICONFLOW_API_KEY")
+    )
     if not api_key:
-        pytest.skip("未检测到 OPENAI_API_KEY，跳过真实 OpenAI 调用测试。")
+        pytest.skip("未检测到 OPENAI_API_KEY/SILICONFLOW_API_KEY，跳过真实调用测试。")
 
     config = AppConfig()
     config.openai_key = api_key
@@ -111,9 +115,24 @@ def test_openai_backend_real_call():
 
     preset = StylePreset(name="studio", positive="cinematic lighting, depth of field")
 
-    original_prompt = "一只可爱的白猫，动画风格，可以参考《罗小黑战记》里面的罗小黑"
-    bundle = optimizer.optimize(original_prompt, preset, model="gpt")
+    original_prompt = (
+        "A cute white cat in an anime style, inspired by Luo Xiaohei from The Legend of Hei"
+    )
+    try:
+        bundle = optimizer.optimize(original_prompt, preset, model="gpt")
+    except Exception as exc:  # pragma: no cover - integration handling
+        from openai import AuthenticationError, BadRequestError
+
+        message = str(exc)
+        if isinstance(exc, AuthenticationError) or "Api key is invalid" in message:
+            pytest.skip(f"硅基流动 / OpenAI API 认证失败：{exc}")
+        if isinstance(exc, BadRequestError) and (
+            "Model does not exist" in message or "code': 20012" in message
+        ):
+            pytest.skip(f"硅基流动模型不可用：{exc}")
+        raise
+
     optimized = bundle.optimized.strip()
-    print("优化后提示词：", optimized)
+    print("优化后的提示词：", optimized)
     assert optimized, "优化结果不应为空"
     assert optimized != original_prompt, "优化后的提示词应该与原始提示词有所不同"
