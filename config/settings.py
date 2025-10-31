@@ -40,6 +40,22 @@ def _load_env_file(path: Path) -> None:
         os.environ[key.strip()] = value.strip()
 
 
+def _discover_local_models(model_dir: Path) -> list[dict[str, str]]:
+    """Enumerate locally available diffusion models for selection."""
+    choices: list[dict[str, str]] = []
+    if not model_dir.exists():
+        return choices
+
+    for child in sorted(model_dir.iterdir()):
+        if not child.is_dir():
+            continue
+        has_index = (child / "model_index.json").exists()
+        has_weights = any(child.glob("*.safetensors")) or any(child.glob("*.bin"))
+        if has_index or has_weights:
+            choices.append({"label": child.name, "value": str(child)})
+    return choices
+
+
 def load_config(config_path: Optional[str] = None) -> AppConfig:
     """Return an AppConfig instance with environment-aware settings."""
     env_path = Path(config_path) if config_path else Path(".env")
@@ -56,6 +72,24 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
     text2img_model_id = text2img_override or default_model_path
     img2img_model_id = img2img_override or default_model_path
 
+    discovered_models = _discover_local_models(model_dir)
+    available_models: list[dict[str, str]] = []
+    seen_values: set[str] = set()
+
+    def _add_option(label: str, value: str) -> None:
+        if not value or value in seen_values:
+            return
+        available_models.append({"label": label, "value": value})
+        seen_values.add(value)
+
+    for item in discovered_models:
+        _add_option(item["label"], item["value"])
+
+    default_label_text = Path(text2img_model_id).name if "/" not in text2img_model_id else text2img_model_id
+    default_label_img = Path(img2img_model_id).name if "/" not in img2img_model_id else img2img_model_id
+    _add_option(default_label_text, text2img_model_id)
+    _add_option(default_label_img, img2img_model_id)
+
     metadata: dict[str, Any] = {
         "text2img_model_id": text2img_model_id,
         "img2img_model_id": img2img_model_id,
@@ -63,6 +97,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             "canny": str(model_dir / "controlnet-canny"),
             "depth": str(model_dir / "controlnet-depth"),
         },
+        "available_models": available_models,
     }
 
     openai_key = os.getenv("OPENAI_API_KEY") or os.getenv("SILICONFLOW_API_KEY")

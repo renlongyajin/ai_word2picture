@@ -43,6 +43,7 @@ class Text2ImageService:
         self.config = config
         self._pipeline: Optional[StableDiffusionXLPipeline] = None
         self._device: Optional[str] = None
+        self._model_override: Optional[str] = None
 
     def _preferred_device(self) -> str:
         """Return the preferred torch device."""
@@ -56,8 +57,51 @@ class Text2ImageService:
 
     def _resolve_model_id(self) -> str:
         """Determine which model权重用于推理."""
+        if self._model_override:
+            return self._model_override
         metadata_model_id = self.config.metadata.get("text2img_model_id")
         return metadata_model_id or self.config.text2img_model_id
+
+    def set_model(self, model_id: str) -> str:
+        """Switch the active model and reset the pipeline."""
+        if not model_id:
+            raise ValueError("模型标识不能为空")
+
+        current = self._resolve_model_id()
+        if model_id == current:
+            return current
+
+        self._model_override = model_id
+        self.config.metadata["text2img_model_id"] = model_id
+        self.config.text2img_model_id = model_id
+
+        if self._pipeline is not None:
+            try:
+                self._pipeline.to("cpu", dtype=torch.float32)
+            except Exception:
+                pass
+        self._pipeline = None
+        self._device = None
+        try:
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
+        return model_id
+
+    def offload(self) -> None:
+        """Release GPU resources for the current pipeline."""
+        if self._pipeline is None:
+            return
+        try:
+            self._pipeline.to("cpu", dtype=torch.float32)
+        except Exception:
+            pass
+        self._pipeline = None
+        self._device = None
+        try:
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
 
     def load_pipeline(self) -> None:
         """Lazy-load the text-to-image pipeline."""

@@ -9,9 +9,9 @@ import pytest
 from config.settings import AppConfig
 from modules.optimization.prompt_optimizer import PromptBundle
 from modules.optimization.style_presets import StylePreset, StylePresetRegistry
+from modules.pipelines import text2img
 from modules.pipelines.controlnet_manager import ControlType
 from modules.pipelines.img2img import ImageToImageRequest, ImageToImageResult
-from modules.pipelines import text2img
 from modules.ui import callbacks
 
 
@@ -20,7 +20,9 @@ class DummyText2ImageService:
 
     def __init__(self) -> None:
         self.last_request: Optional[text2img.PromptRequest] = None
+        self.last_model: Optional[str] = None
         self.should_fail = False
+        self.offloaded = False
 
     def generate(self, request: text2img.PromptRequest) -> text2img.ImageResult:
         if self.should_fail:
@@ -34,12 +36,21 @@ class DummyText2ImageService:
             seed=request.seed,
         )
 
+    def set_model(self, model_id: str) -> str:
+        self.last_model = model_id
+        return model_id
+
+    def offload(self) -> None:
+        self.offloaded = True
+
 
 class DummyImage2ImageService:
     """Stub image-to-image service for capturing inputs."""
 
     def __init__(self) -> None:
         self.last_request: Optional[ImageToImageRequest] = None
+        self.last_model: Optional[str] = None
+        self.offloaded = False
 
     def generate(self, request: ImageToImageRequest) -> ImageToImageResult:
         self.last_request = request
@@ -52,10 +63,19 @@ class DummyImage2ImageService:
             control_type=request.control_type,
         )
 
+    def set_model(self, model_id: str) -> str:
+        self.last_model = model_id
+        return model_id
+
+    def offload(self) -> None:
+        self.offloaded = True
+
 
 class DummyOptimizer:
+    """Minimal optimizer stub returning fixed prompts."""
+
     def __init__(self) -> None:
-        self.calls = []
+        self.calls: list[tuple[str, StylePreset, str]] = []
 
     def optimize(self, prompt: str, preset: StylePreset, model: str = "claude") -> PromptBundle:
         self.calls.append((prompt, preset, model))
@@ -72,9 +92,11 @@ def build_callbacks(
     text_service: DummyText2ImageService | None = None,
     image_service: DummyImage2ImageService | None = None,
     registry: StylePresetRegistry | None = None,
+    config: AppConfig | None = None,
 ):
+    config = config or AppConfig()
     return callbacks.build_callbacks(
-        AppConfig(),
+        config,
         optimizer=optimizer,
         text2img=text_service,
         image2img=image_service,
@@ -107,7 +129,8 @@ def test_on_optimize_prompt_without_backend():
 
 def test_on_generate_text_uses_optimized_prompt():
     text_service = DummyText2ImageService()
-    cb = build_callbacks(text_service=text_service)["on_generate_text"]
+    image_service = DummyImage2ImageService()
+    cb = build_callbacks(text_service=text_service, image_service=image_service)["on_generate_text"]
 
     image, message = cb(
         "base prompt",
@@ -130,6 +153,7 @@ def test_on_generate_text_uses_optimized_prompt():
     assert request.prompt == "optimized prompt"
     assert "opt negative" in (request.negative_prompt or "")
     assert "user negative" in (request.negative_prompt or "")
+    assert image_service.offloaded is True
 
 
 def test_on_generate_text_handles_exception():
@@ -188,6 +212,7 @@ def test_on_generate_image_with_control_and_optimized_prompt():
     negative = request.negative_prompt or ""
     assert "user negative" in negative
     assert "opt negative" in negative
+    assert text_service.offloaded is True
 
 
 def test_on_generate_image_requires_init_image():
@@ -212,3 +237,45 @@ def test_on_generate_image_requires_init_image():
 
     assert image is None
     assert "请先上传初始图像" in message
+
+
+def test_on_change_text_model_switches_service():
+    text_service = DummyText2ImageService()
+    config = AppConfig()
+    config.metadata["available_models"] = [
+        {"label": "模型A", "value": "path/to/model_a"},
+        {"label": "模型B", "value": "path/to/model_b"},
+    ]
+    cb_map = build_callbacks(
+        optimizer=DummyOptimizer(),
+        text_service=text_service,
+        image_service=DummyImage2ImageService(),
+        registry=StylePresetRegistry(),
+        config=config,
+    )
+
+    message = cb_map["on_change_text_model"]("模型B")
+
+    assert "切换文生图模型" in message
+    assert text_service.last_model == "path/to/model_b"
+
+
+def test_on_change_img_model_switches_service():
+    image_service = DummyImage2ImageService()
+    config = AppConfig()
+    config.metadata["available_models"] = [
+        {"label": "模型A", "value": "path/to/model_a"},
+        {"label": "模型B", "value": "path/to/model_b"},
+    ]
+    cb_map = build_callbacks(
+        optimizer=DummyOptimizer(),
+        text_service=DummyText2ImageService(),
+        image_service=image_service,
+        registry=StylePresetRegistry(),
+        config=config,
+    )
+
+    message = cb_map["on_change_img_model"]("模型A")
+
+    assert "切换图生图模型" in message
+    assert image_service.last_model == "path/to/model_a"

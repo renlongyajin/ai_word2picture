@@ -39,6 +39,33 @@ def _control_choices() -> Sequence[str]:
     return [""] + [control_type.value for control_type in ControlType]
 
 
+def _model_labels(metadata: dict[str, Any], key: str) -> tuple[list[str], str, dict[str, str]]:
+    entries = metadata.get("available_models", [])
+    label_to_value: dict[str, str] = {}
+    if isinstance(entries, list):
+        for item in entries:
+            if not isinstance(item, dict):
+                continue
+            value = str(item.get("value") or "")
+            label = str(item.get("label") or value)
+            if value and label not in label_to_value:
+                label_to_value[label] = value
+
+    current_value = metadata.get(key, "")
+    default_label = next(
+        (label for label, value in label_to_value.items() if value == current_value),
+        None,
+    )
+    if default_label is None and current_value:
+        label_to_value[current_value] = current_value
+        default_label = current_value
+
+    labels = list(label_to_value.keys()) or ["当前未发现可用模型"]
+    if default_label is None:
+        default_label = labels[0]
+    return labels, default_label, label_to_value
+
+
 def build_app(config: AppConfig) -> Any:
     """Compose and return the Gradio application."""
     if gr is None:
@@ -66,6 +93,13 @@ def build_app(config: AppConfig) -> Any:
         backend_choices = ["claude", "gpt"]
         default_backend = backend_choices[0]
     control_choices = _control_choices()
+
+    text_model_labels, default_text_model, _ = _model_labels(
+        config.metadata, "text2img_model_id"
+    )
+    img_model_labels, default_img_model, _ = _model_labels(
+        config.metadata, "img2img_model_id"
+    )
 
     with gr.Blocks(title="AI Creative Image Assistant") as demo:
         gr.Markdown("## AI 创意图像助手")
@@ -101,6 +135,12 @@ def build_app(config: AppConfig) -> Any:
                             value=default_backend,
                         )
                         optimize_btn = gr.Button("提示词优化")
+                    model_select = gr.Dropdown(
+                        label="推理模型",
+                        choices=text_model_labels,
+                        value=default_text_model,
+                        interactive=True,
+                    )
 
                     negative = gr.Textbox(
                         label="反向提示词",
@@ -148,6 +188,12 @@ def build_app(config: AppConfig) -> Any:
                 outputs=[optimized_prompt, optimized_negative_prompt, status],
             )
 
+            model_select.change(
+                fn=callbacks_map["on_change_text_model"],
+                inputs=model_select,
+                outputs=status,
+            )
+
             generate_btn.click(
                 fn=callbacks_map["on_generate_text"],
                 inputs=[
@@ -172,7 +218,11 @@ def build_app(config: AppConfig) -> Any:
                 with gr.Column():
                     init_image = gr.Image(label="初始图像", type="pil")
                     control_image = gr.Image(label="ControlNet 参考图像（可选）", type="pil")
-                    prompt_img = gr.Textbox(label="提示词", lines=4, placeholder="描述目标效果")
+                    prompt_img = gr.Textbox(
+                        label="提示词",
+                        lines=4,
+                        placeholder="描述目标效果",
+                    )
                     optimized_prompt_img = gr.Textbox(
                         label="优化后提示词（可编辑）",
                         lines=4,
@@ -195,6 +245,12 @@ def build_app(config: AppConfig) -> Any:
                             value=default_backend,
                         )
                         optimize_btn_img = gr.Button("提示词优化（图生图）")
+                    model_select_img = gr.Dropdown(
+                        label="推理模型",
+                        choices=img_model_labels,
+                        value=default_img_model,
+                        interactive=True,
+                    )
 
                     negative_img = gr.Textbox(label="反向提示词", lines=2)
                     strength = gr.Slider(
@@ -242,6 +298,12 @@ def build_app(config: AppConfig) -> Any:
                 fn=callbacks_map["on_optimize_prompt"],
                 inputs=[prompt_img, style_select_img, backend_select_img],
                 outputs=[optimized_prompt_img, optimized_negative_img, status_img],
+            )
+
+            model_select_img.change(
+                fn=callbacks_map["on_change_img_model"],
+                inputs=model_select_img,
+                outputs=status_img,
             )
 
             generate_img_btn.click(

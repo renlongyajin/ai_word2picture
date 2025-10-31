@@ -54,6 +54,7 @@ class Image2ImageService:
         self._control_pipelines: Dict[ControlType, StableDiffusionXLControlNetPipeline] = {}
         self._device: Optional[str] = None
         self._control_manager = control_manager or self._create_control_manager()
+        self._model_override: Optional[str] = None
 
     def _create_control_manager(self) -> ControlNetManager:
         mapping: dict[ControlType, str] = {}
@@ -78,8 +79,64 @@ class Image2ImageService:
         return torch.float32
 
     def _resolve_model_id(self) -> str:
+        if self._model_override:
+            return self._model_override
         metadata_model_id = self.config.metadata.get("img2img_model_id")
         return metadata_model_id or self.config.img2img_model_id
+
+    def set_model(self, model_id: str) -> str:
+        """Switch the active img2img model and drop cached pipelines."""
+        if not model_id:
+            raise ValueError("模型标识不能为空")
+
+        current = self._resolve_model_id()
+        if model_id == current:
+            return current
+
+        self._model_override = model_id
+        self.config.metadata["img2img_model_id"] = model_id
+        self.config.img2img_model_id = model_id
+
+        if self._img2img_pipeline is not None:
+            try:
+                self._img2img_pipeline.to("cpu", dtype=torch.float32)
+            except Exception:
+                pass
+        for pipeline in self._control_pipelines.values():
+            try:
+                pipeline.to("cpu", dtype=torch.float32)
+            except Exception:
+                pass
+        self._img2img_pipeline = None
+        self._control_pipelines.clear()
+        self._device = None
+        try:
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
+        return model_id
+
+    def offload(self) -> None:
+        """Release cached ControlNet and img2img pipelines from GPU."""
+        if self._img2img_pipeline is not None:
+            try:
+                self._img2img_pipeline.to("cpu", dtype=torch.float32)
+            except Exception:
+                pass
+            self._img2img_pipeline = None
+
+        for control_type, pipeline in list(self._control_pipelines.items()):
+            try:
+                pipeline.to("cpu", dtype=torch.float32)
+            except Exception:
+                pass
+            self._control_pipelines.pop(control_type, None)
+
+        self._device = None
+        try:
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
 
     def _pipeline_kwargs(self, dtype: torch.dtype) -> Dict[str, Any]:
         cache_dir = Path(self.config.model_dir)

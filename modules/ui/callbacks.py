@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from config.settings import AppConfig
 from modules.optimization.prompt_optimizer import PromptOptimizer
@@ -25,14 +25,25 @@ def build_callbacks(
     if not registry.list_presets():
         registry.add(StylePreset(name="default", positive="", negative=""))
 
+    model_entries = config.metadata.get("available_models", [])
+    model_labels: Dict[str, str] = {}
+    if isinstance(model_entries, list):
+        for item in model_entries:
+            if not isinstance(item, dict):
+                continue
+            value = str(item.get("value") or "")
+            label = str(item.get("label") or value)
+            if value:
+                model_labels[label] = value
+
     def _ensure_text_service() -> Text2ImageService:
         if text2img is None:
-            raise RuntimeError("Text2ImageService 未配置。")
+            raise RuntimeError("文生图服务未配置")
         return text2img
 
     def _ensure_image_service() -> Image2ImageService:
         if image2img is None:
-            raise RuntimeError("Image2ImageService 未配置。")
+            raise RuntimeError("图生图服务未配置")
         return image2img
 
     def _normalize_seed(seed: Any) -> Optional[int]:
@@ -76,6 +87,11 @@ def build_callbacks(
         merged = "\n".join(segments)
         return merged or None
 
+    def _resolve_model_selection(selection: str, fallback: str) -> str:
+        if not selection:
+            return fallback
+        return model_labels.get(selection, selection)
+
     def on_optimize_prompt(
         prompt: str,
         style_name: str,
@@ -84,7 +100,7 @@ def build_callbacks(
         style = _resolve_style(style_name or config.default_prompt_style)
 
         if optimizer is None:
-            return prompt, "", "未配置提示词优化服务，已返回原始提示。"
+            return prompt, "", "未配置提示词优化服务，已返回原始提示词。"
 
         try:
             bundle = optimizer.optimize(prompt, style, model=model_name or "claude")
@@ -92,7 +108,7 @@ def build_callbacks(
             return prompt, "", f"提示词优化失败：{exc}"
 
         optimized_prompt = bundle.optimized or prompt
-        optimized_negative_parts = []
+        optimized_negative_parts: list[str] = []
         if bundle.negative_prompt:
             optimized_negative_parts.append(bundle.negative_prompt.strip())
         if style.negative:
@@ -103,8 +119,26 @@ def build_callbacks(
         return (
             optimized_prompt,
             optimized_negative,
-            "提示词优化成功，可在生成前继续编辑",
+            "提示词优化成功，可在生成前继续编辑。",
         )
+
+    def on_change_text_model(selection: str) -> str:
+        service = _ensure_text_service()
+        target = _resolve_model_selection(selection, config.metadata.get("text2img_model_id", ""))
+        try:
+            resolved = service.set_model(target)
+        except Exception as exc:  # noqa: BLE001
+            return f"切换文生图模型失败：{exc}"
+        return f"已切换文生图模型：{resolved}"
+
+    def on_change_img_model(selection: str) -> str:
+        service = _ensure_image_service()
+        target = _resolve_model_selection(selection, config.metadata.get("img2img_model_id", ""))
+        try:
+            resolved = service.set_model(target)
+        except Exception as exc:  # noqa: BLE001
+            return f"切换图生图模型失败：{exc}"
+        return f"已切换图生图模型：{resolved}"
 
     def on_generate_text(
         prompt: str,
@@ -120,6 +154,11 @@ def build_callbacks(
         model_name: str,
     ) -> tuple[Optional[Any], str]:
         service = _ensure_text_service()
+        if image2img is not None and hasattr(image2img, "offload"):
+            try:
+                image2img.offload()
+            except Exception:
+                pass
         style = _resolve_style(style_name or config.default_prompt_style)
 
         prompt_for_model = optimized_prompt.strip() or _compose_prompt(prompt, style)
@@ -171,6 +210,11 @@ def build_callbacks(
             return None, "生成失败：请先上传初始图像。"
 
         service = _ensure_image_service()
+        if text2img is not None and hasattr(text2img, "offload"):
+            try:
+                text2img.offload()
+            except Exception:
+                pass
         style = _resolve_style(style_name or config.default_prompt_style)
 
         prompt_for_model = optimized_prompt.strip() or _compose_prompt(prompt, style)
@@ -203,4 +247,6 @@ def build_callbacks(
         "on_optimize_prompt": on_optimize_prompt,
         "on_generate_text": on_generate_text,
         "on_generate_image": on_generate_image,
+        "on_change_text_model": on_change_text_model,
+        "on_change_img_model": on_change_img_model,
     }
