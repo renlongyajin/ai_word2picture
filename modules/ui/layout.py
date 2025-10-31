@@ -58,7 +58,13 @@ def build_app(config: AppConfig) -> Any:
     )
 
     style_choices = _style_choices(style_registry)
-    backend_choices = ["claude", "gpt"]
+    available_backends = optimizer.available_backends()
+    if available_backends:
+        backend_choices = available_backends
+        default_backend = available_backends[0]
+    else:
+        backend_choices = ["claude", "gpt"]
+        default_backend = backend_choices[0]
     control_choices = _control_choices()
 
     with gr.Blocks(title="AI Creative Image Assistant") as demo:
@@ -89,7 +95,7 @@ def build_app(config: AppConfig) -> Any:
                         backend_select = gr.Dropdown(
                             label="优化模型",
                             choices=backend_choices,
-                            value=backend_choices[0],
+                            value=default_backend,
                         )
                         optimize_btn = gr.Button("提示词优化")
 
@@ -180,7 +186,7 @@ def build_app(config: AppConfig) -> Any:
                         backend_select_img = gr.Dropdown(
                             label="优化模型",
                             choices=backend_choices,
-                            value=backend_choices[0],
+                            value=default_backend,
                         )
                         optimize_btn_img = gr.Button("提示词优化（图生图）")
 

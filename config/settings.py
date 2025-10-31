@@ -45,12 +45,17 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
     env_path = Path(config_path) if config_path else Path(".env")
     _load_env_file(env_path)
 
+    model_dir_env = os.getenv("MODEL_DIR", "models")
+    model_dir = Path(model_dir_env).expanduser().resolve()
+    for env_name in ("HUGGINGFACE_HUB_CACHE", "TRANSFORMERS_CACHE", "DIFFUSERS_CACHE"):
+        os.environ.setdefault(env_name, str(model_dir))
+
     metadata: dict[str, Any] = {
-        "text2img_model_id": "models/sdxl-turbo",
-        "img2img_model_id": "models/sdxl-turbo",
+        "text2img_model_id": str(model_dir / "sdxl-turbo"),
+        "img2img_model_id": str(model_dir / "sdxl-turbo"),
         "controlnet_models": {
-            "canny": "models/controlnet-canny",
-            "depth": "models/controlnet-depth",
+            "canny": str(model_dir / "controlnet-canny"),
+            "depth": str(model_dir / "controlnet-depth"),
         },
     }
 
@@ -63,6 +68,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
     if openai_model:
         metadata["openai_model"] = openai_model
     return AppConfig(
+        model_dir=model_dir,
         text2img_model_id=metadata["text2img_model_id"],
         img2img_model_id=metadata["img2img_model_id"],
         anthropic_key=os.getenv("ANTHROPIC_API_KEY"),

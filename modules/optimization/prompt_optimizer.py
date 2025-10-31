@@ -54,6 +54,21 @@ class PromptOptimizer:
         """Return True when backend exists."""
         return name.lower() in self._backends
 
+    def available_backends(self) -> list[str]:
+        """Return the list of registered backends ordered by preference."""
+        priority = {"gpt": 0, "claude": 1}
+        return sorted(
+            (backend for backend in self._backends.keys()),
+            key=lambda item: (priority.get(item, 99), item),
+        )
+
+    def default_backend(self) -> str:
+        """Return the preferred backend name, falling back to Claude."""
+        choices = self.available_backends()
+        if choices:
+            return choices[0]
+        return "claude"
+
     def optimize(self, prompt: str, preset: StylePreset, model: str = "claude") -> PromptBundle:
         """Return the optimized prompt bundle."""
         positive = preset.positive or ""
