@@ -50,9 +50,15 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
     for env_name in ("HUGGINGFACE_HUB_CACHE", "TRANSFORMERS_CACHE", "DIFFUSERS_CACHE"):
         os.environ.setdefault(env_name, str(model_dir))
 
+    text2img_override = os.getenv("TEXT2IMG_MODEL_ID")
+    img2img_override = os.getenv("IMG2IMG_MODEL_ID")
+    default_model_path = str(model_dir / "sdxl-turbo")
+    text2img_model_id = text2img_override or default_model_path
+    img2img_model_id = img2img_override or default_model_path
+
     metadata: dict[str, Any] = {
-        "text2img_model_id": str(model_dir / "sdxl-turbo"),
-        "img2img_model_id": str(model_dir / "sdxl-turbo"),
+        "text2img_model_id": text2img_model_id,
+        "img2img_model_id": img2img_model_id,
         "controlnet_models": {
             "canny": str(model_dir / "controlnet-canny"),
             "depth": str(model_dir / "controlnet-depth"),
@@ -69,8 +75,8 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
         metadata["openai_model"] = openai_model
     return AppConfig(
         model_dir=model_dir,
-        text2img_model_id=metadata["text2img_model_id"],
-        img2img_model_id=metadata["img2img_model_id"],
+        text2img_model_id=text2img_model_id,
+        img2img_model_id=img2img_model_id,
         anthropic_key=os.getenv("ANTHROPIC_API_KEY"),
         openai_key=openai_key,
         metadata=metadata,

@@ -65,12 +65,15 @@ def build_callbacks(
     def _combine_negative(
         preset: StylePreset, user_negative: str, optimized_negative: Optional[str]
     ) -> Optional[str]:
-        segments = [
+        segments: list[str] = []
+        for candidate in (
             (optimized_negative or "").strip(),
             (preset.negative or "").strip(),
             (user_negative or "").strip(),
-        ]
-        merged = "\n".join(segment for segment in segments if segment)
+        ):
+            if candidate and candidate not in segments:
+                segments.append(candidate)
+        merged = "\n".join(segments)
         return merged or None
 
     def on_optimize_prompt(
@@ -89,8 +92,19 @@ def build_callbacks(
             return prompt, "", f"提示词优化失败：{exc}"
 
         optimized_prompt = bundle.optimized or prompt
-        optimized_negative = bundle.negative_prompt or ""
-        return optimized_prompt, optimized_negative, "提示词优化成功，可在生成前继续编辑。"
+        optimized_negative_parts = []
+        if bundle.negative_prompt:
+            optimized_negative_parts.append(bundle.negative_prompt.strip())
+        if style.negative:
+            base_negative = style.negative.strip()
+            if base_negative and base_negative not in optimized_negative_parts:
+                optimized_negative_parts.append(base_negative)
+        optimized_negative = "\n".join(filter(None, optimized_negative_parts))
+        return (
+            optimized_prompt,
+            optimized_negative,
+            "提示词优化成功，可在生成前继续编辑",
+        )
 
     def on_generate_text(
         prompt: str,

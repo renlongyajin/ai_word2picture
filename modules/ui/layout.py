@@ -60,7 +60,7 @@ def build_app(config: AppConfig) -> Any:
     style_choices = _style_choices(style_registry)
     available_backends = optimizer.available_backends()
     if available_backends:
-        backend_choices = available_backends
+        backend_choices = list(available_backends)
         default_backend = available_backends[0]
     else:
         backend_choices = ["claude", "gpt"]
@@ -72,18 +72,21 @@ def build_app(config: AppConfig) -> Any:
 
         # 文生图
         with gr.Tab("文生图"):
-            optimized_negative_state = gr.State("")
-
             with gr.Row():
                 with gr.Column():
                     prompt = gr.Textbox(
                         label="提示词",
                         lines=4,
-                        placeholder="描述你想要生成的图像…",
+                        placeholder="描述你想要生成的图像",
                     )
                     optimized_prompt = gr.Textbox(
                         label="优化后提示词（可编辑）",
                         lines=4,
+                        placeholder="点击提示词优化后将填充此处",
+                    )
+                    optimized_negative_prompt = gr.Textbox(
+                        label="优化后反向提示词（可编辑）",
+                        lines=3,
                         placeholder="点击提示词优化后将填充此处",
                     )
                     with gr.Row():
@@ -102,7 +105,7 @@ def build_app(config: AppConfig) -> Any:
                     negative = gr.Textbox(
                         label="反向提示词",
                         lines=2,
-                        placeholder="不希望出现的元素…",
+                        placeholder="不希望出现的元素",
                     )
                     guidance = gr.Slider(
                         label="引导系数",
@@ -142,7 +145,7 @@ def build_app(config: AppConfig) -> Any:
             optimize_btn.click(
                 fn=callbacks_map["on_optimize_prompt"],
                 inputs=[prompt, style_select, backend_select],
-                outputs=[optimized_prompt, optimized_negative_state, status],
+                outputs=[optimized_prompt, optimized_negative_prompt, status],
             )
 
             generate_btn.click(
@@ -151,7 +154,7 @@ def build_app(config: AppConfig) -> Any:
                     prompt,
                     optimized_prompt,
                     negative,
-                    optimized_negative_state,
+                    optimized_negative_prompt,
                     guidance,
                     steps,
                     seed,
@@ -165,16 +168,19 @@ def build_app(config: AppConfig) -> Any:
 
         # 图生图
         with gr.Tab("图生图"):
-            optimized_negative_state_img = gr.State("")
-
             with gr.Row():
                 with gr.Column():
                     init_image = gr.Image(label="初始图像", type="pil")
                     control_image = gr.Image(label="ControlNet 参考图像（可选）", type="pil")
-                    prompt_img = gr.Textbox(label="提示词", lines=4, placeholder="描述目标效果…")
+                    prompt_img = gr.Textbox(label="提示词", lines=4, placeholder="描述目标效果")
                     optimized_prompt_img = gr.Textbox(
                         label="优化后提示词（可编辑）",
                         lines=4,
+                        placeholder="点击提示词优化后将填充此处",
+                    )
+                    optimized_negative_img = gr.Textbox(
+                        label="优化后反向提示词（可编辑）",
+                        lines=3,
                         placeholder="点击提示词优化后将填充此处",
                     )
                     with gr.Row():
@@ -235,7 +241,7 @@ def build_app(config: AppConfig) -> Any:
             optimize_btn_img.click(
                 fn=callbacks_map["on_optimize_prompt"],
                 inputs=[prompt_img, style_select_img, backend_select_img],
-                outputs=[optimized_prompt_img, optimized_negative_state_img, status_img],
+                outputs=[optimized_prompt_img, optimized_negative_img, status_img],
             )
 
             generate_img_btn.click(
@@ -245,7 +251,7 @@ def build_app(config: AppConfig) -> Any:
                     prompt_img,
                     optimized_prompt_img,
                     negative_img,
-                    optimized_negative_state_img,
+                    optimized_negative_img,
                     strength,
                     guidance_img,
                     steps_img,

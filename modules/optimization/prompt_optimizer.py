@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional
 
@@ -30,7 +31,15 @@ class BackendRequest:
     metadata: Dict[str, Any]
 
 
-BackendCallable = Callable[[BackendRequest], str]
+@dataclass(slots=True)
+class BackendResult:
+    """Response payload produced by optimizer backends."""
+
+    positive_prompt: Optional[str] = None
+    negative_prompt: Optional[str] = None
+
+
+BackendCallable = Callable[[BackendRequest], BackendResult | Dict[str, Any] | str]
 
 
 class PromptOptimizer:
@@ -76,6 +85,7 @@ class PromptOptimizer:
         combined_prompt = self._compose_prompt(prompt, positive)
 
         backend = self._backends.get(model.lower())
+        backend_result = BackendResult()
         if backend is not None:
             request = BackendRequest(
                 prompt_text=combined_prompt,
@@ -84,7 +94,9 @@ class PromptOptimizer:
                 negative_style=negative,
                 metadata=self.config.metadata,
             )
-            optimized = backend(request)
+            backend_payload = backend(request)
+            backend_result = self._normalize_backend_response(backend_payload)
+            optimized = backend_result.positive_prompt or combined_prompt
         else:
             if model.lower() == "gpt":
                 if self.config.openai_key:
@@ -106,10 +118,15 @@ class PromptOptimizer:
                     raise RuntimeError(message)
             optimized = combined_prompt
 
+        backend_negative = backend_result.negative_prompt
+        negative_result = backend_negative.strip() if backend_negative else ""
+        if not negative_result and negative:
+            negative_result = negative.strip()
+
         return PromptBundle(
             original=prompt,
             optimized=optimized,
-            negative_prompt=negative or None,
+            negative_prompt=negative_result or None,
         )
 
     # Internal helpers ---------------------------------------------------------
@@ -124,6 +141,76 @@ class PromptOptimizer:
         self._register_claude_backend()
         self._register_openai_backend()
 
+    def _normalize_backend_response(
+        self, payload: BackendResult | Dict[str, Any] | str
+    ) -> BackendResult:
+        """Coerce backend outputs into BackendResult."""
+        if isinstance(payload, BackendResult):
+            return payload
+        if isinstance(payload, dict):
+            return BackendResult(
+                positive_prompt=payload.get("positive_prompt")
+                or payload.get("optimized_prompt")
+                or payload.get("prompt"),
+                negative_prompt=payload.get("negative_prompt"),
+            )
+        if isinstance(payload, str):
+            parsed = self._parse_backend_text(payload)
+            if parsed is not None:
+                return parsed
+            return BackendResult(positive_prompt=payload)
+        return BackendResult()
+
+    def _parse_backend_text(self, text: str) -> Optional[BackendResult]:
+        """Try to extract structured prompts from backend raw text."""
+        cleaned = (text or "").strip()
+        if not cleaned:
+            return None
+
+        # Remove fenced code blocks (```json ... ```)
+        if cleaned.startswith("```"):
+            stripped = cleaned.strip("`")
+            # safer: remove the first line (``` or ```json)
+            lines = cleaned.splitlines()
+            if len(lines) >= 2:
+                # drop the first fence line
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                # drop closing fence if present
+                if lines and lines[-1].startswith("```"):
+                    lines = lines[:-1]
+                cleaned = "\n".join(lines).strip()
+            else:
+                cleaned = stripped
+            if not cleaned:
+                return None
+
+        # JSON object payload
+        try:
+            data = json.loads(cleaned)
+        except json.JSONDecodeError:
+            data = None
+        if isinstance(data, dict):
+            positive = data.get("positive_prompt") or data.get("prompt") or data.get("optimized_prompt")
+            negative = data.get("negative_prompt")
+            if positive or negative:
+                return BackendResult(
+                    positive_prompt=str(positive) if positive else None,
+                    negative_prompt=str(negative) if negative else None,
+                )
+
+        # Simple delimiter-based format
+        markers = ["Negative Prompt:", "Negative:", "反向提示词:", "反向提示:"]
+        for marker in markers:
+            if marker in cleaned:
+                positive_part, negative_part = cleaned.split(marker, 1)
+                return BackendResult(
+                    positive_prompt=positive_part.strip(),
+                    negative_prompt=negative_part.strip(),
+                )
+
+        return None
+
     def _register_claude_backend(self) -> None:
         if not self.config.anthropic_key:
             return
@@ -135,7 +222,7 @@ class PromptOptimizer:
 
         client = anthropic_module.Anthropic(api_key=self.config.anthropic_key)
 
-        def _claude_backend(request: BackendRequest) -> str:
+        def _claude_backend(request: BackendRequest) -> BackendResult:
             message = client.messages.create(
                 model=self.config.metadata.get("claude_model", "claude-3-haiku-20240307"),
                 max_tokens=256,
@@ -143,8 +230,10 @@ class PromptOptimizer:
                     {
                         "role": "system",
                         "content": (
-                            "你是一名提示词打磨专家，请在保持语义一致的情况下，使提示词更具画面感与艺术性。"
-                            " 使用中文输出，并强化氛围与风格描述。"
+                            "你是一名资深视觉提示词优化师，负责根据用户需求生成文生图提示词。"
+                            " 请输出 JSON 字符串，其中 `positive_prompt` 是优化后的正向提示词，"
+                            " `negative_prompt` 是建议的反向提示词（没有可留空字符串）。"
+                            " 仅返回 JSON，不要输出额外说明。"
                         ),
                     },
                     {
@@ -156,7 +245,11 @@ class PromptOptimizer:
                     },
                 ],
             )
-            return message.content[0].text if message.content else request.prompt_text
+            reply = message.content[0].text if message.content else request.prompt_text
+            parsed = self._parse_backend_text(reply)
+            if parsed is not None:
+                return parsed
+            return BackendResult(positive_prompt=reply or request.prompt_text)
 
         self.register_backend("claude", _claude_backend)
 
@@ -199,10 +292,19 @@ class PromptOptimizer:
             client_kwargs["base_url"] = base_url
         client = openai_module.OpenAI(**client_kwargs)
 
-        def _gpt_backend(request: BackendRequest) -> str:
+        def _gpt_backend(request: BackendRequest) -> BackendResult:
             base_prompt = (
-                "你是一名资深视觉提示词优化师，专门负责文生图相关业务，你需要扩展用户的提示词，将其更改为具体、细节、整洁的提示词，便于文生图的进行"
-                " 禁止简单重复原句。"
+                "你是一名资深视觉提示词优化师，需要扩展并润色用户提示词，使其更加具体、细节丰富、视觉化。"
+                " 请始终返回一个 JSON 字符串，包含 `positive_prompt` 与 `negative_prompt` 两个字段。"
+                " `positive_prompt` 为优化后的正向提示词，`negative_prompt` 为建议的反向提示词"
+                " 禁止输出除 JSON 之外的其他文字。"
+                "最终输出结果为英文。"
+                "参考positive_prompt:masterpiece, ultra-HD, cinematic lighting, photorealistic, impressionism (1.5), high detail, depth of field, (blurred background), (dramatic lighting),masterpiece, best quality, very aesthetic, 8k, masterpiece, ultra-HD, cinematic lighting, high detail, depth of field, soft reflections, amazing composition,(ultra-HD:0.9), cinematic lighting, photorealistic, impressionism (1.5), high detail, depth of field, (blurred background), (dramatic lighting),masterpiece, best quality, very aesthetic, , 8k,,masterpiece, ultra-HD, cinematic lighting, high detail, depth of field, soft reflections, amazing composition,"
+                "1girl, petite, short orange hair, blue eyes, highly detailed eyes, oversized unbuttoned White shirt, off shoulder,  golden bracelet, denim torn shorts, black knee-highs, 18yo, blush, night club, looking at viewer, drunk, sitting on high chair, random pose, relaxed pose, glass of beer,"
+                "studio_lights,( dimly lit:1.2),(professional lighting:1.3), Dynamic shot, Dynamic pose, conjuring, foreshortening, extreme perspective"
+                "参考negative_prompt:worst quality, low quality, displeasing, text, , watermark, bad anatomy, text, artist name, signature, hearts, deformed hands, missing finger, shiny skin,"
+                "反向提示词不可为空。最终该提示词会被用于stable diffsuion生成图片。"
+                "提示词应该尽可能保留原本信息，例如数量信息，例如如果只是一个女孩的图像，那就是1 girl，数量信息需要显式声明。"            
             )
 
             model_name = self.config.metadata.get("openai_model", "gpt-4o-mini")
@@ -217,7 +319,7 @@ class PromptOptimizer:
                             "content": (
                                 f"基础提示：{request.original_prompt}\n"
                                 f"风格提示：{request.positive_style}\n"
-                                "请输出一个多句的优化提示词，可分多段，但不要枚举列表。"
+                                "请输出 JSON 字符串，字段为 positive_prompt（正向提示词）和 negative_prompt（反向提示词）。"
                             ),
                         },
                     ],
@@ -225,9 +327,9 @@ class PromptOptimizer:
                     temperature=0.85,
                 )
                 if completion.choices:
-                    optimized = (completion.choices[0].message.content or "").strip()
+                    raw = (completion.choices[0].message.content or "").strip()
                 else:
-                    optimized = ""
+                    raw = ""
             else:
                 completion = client.responses.create(
                     model=model_name,
@@ -244,7 +346,7 @@ class PromptOptimizer:
                                     "text": (
                                         f"基础提示：{request.original_prompt}\n"
                                         f"风格提示：{request.positive_style}\n"
-                                        "请输出一个多句的优化提示词，可分多段，但不要枚举列表。"
+                                        "请输出 JSON 字符串，字段为 positive_prompt（正向提示词）和 negative_prompt（反向提示词）。"
                                     ),
                                 }
                             ],
@@ -253,12 +355,10 @@ class PromptOptimizer:
                     max_output_tokens=512,
                     temperature=0.85,
                 )
-                optimized = self._extract_openai_text(completion, request.prompt_text).strip()
+                raw = self._extract_openai_text(completion, request.prompt_text).strip()
 
-            if optimized.lower() in {
-                request.original_prompt.strip().lower(),
-                request.prompt_text.strip().lower(),
-            }:
+            result = self._parse_backend_text(raw)
+            if result is None or not (result.positive_prompt or "").strip():
                 enriched = (
                     f"{request.original_prompt.strip()}，背景延伸到暮色城市屋顶的广阔视角，"
                     "远处霓虹与柔雾交织，烘托温暖而灵动的氛围。"
@@ -266,8 +366,8 @@ class PromptOptimizer:
                     "毛尖反射出偏粉与紫罗兰的高光。空气里漂浮细小光尘，增强梦幻质感。"
                     f"\n风格提示：{request.positive_style or 'cinematic lighting'}"
                 )
-                return enriched
+                return BackendResult(positive_prompt=enriched)
 
-            return optimized
+            return result
 
         self.register_backend("gpt", _gpt_backend)

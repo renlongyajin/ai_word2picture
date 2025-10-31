@@ -25,13 +25,18 @@ def test_optimize_with_registered_backend():
 
     def fake_backend(request):
         assert "dreamy lighting" in request.prompt_text
-        return "LLM optimized prompt"
+        return """```json
+{
+  "positive_prompt": "LLM optimized prompt",
+  "negative_prompt": "llm negative prompt"
+}
+```"""
 
     optimizer.register_backend("claude", fake_backend)
     bundle = optimizer.optimize("A sunset city skyline", preset, model="claude")
 
     assert bundle.optimized == "LLM optimized prompt"
-    assert bundle.negative_prompt == "low quality"
+    assert bundle.negative_prompt == "llm negative prompt"
     assert bundle.original == "A sunset city skyline"
 
 
@@ -59,7 +64,9 @@ def test_openai_backend_registered(monkeypatch):
 
         def create(self, **kwargs):
             self.calls.append(kwargs)
-            return DummyCompletion("Optimized prompt: cat in neon-lit alley")
+            return DummyCompletion(
+                '{"positive_prompt": "Optimized prompt: cat in neon-lit alley", "negative_prompt": "no blurry details"}'
+            )
 
     class DummyOpenAI:
         def __init__(self, api_key: str) -> None:
@@ -90,6 +97,7 @@ def test_openai_backend_registered(monkeypatch):
     )
 
     assert "Optimized prompt" in bundle.optimized
+    assert bundle.negative_prompt == "no blurry details"
     assert optimizer.warnings == []
 
 
