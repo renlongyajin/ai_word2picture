@@ -37,7 +37,7 @@ def _load_env_file(path: Path) -> None:
         if not stripped or stripped.startswith("#") or "=" not in stripped:
             continue
         key, value = stripped.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip())
+        os.environ[key.strip()] = value.strip()
 
 
 def load_config(config_path: Optional[str] = None) -> AppConfig:
